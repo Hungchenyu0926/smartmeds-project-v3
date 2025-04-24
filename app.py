@@ -1,16 +1,17 @@
 import streamlit as st
 import gspread
+from google.oauth2.service_account import Credentials
 from openai import OpenAI
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
 st.set_page_config(page_title="SmartMeds-AI", page_icon="💊", layout="centered")
 st.title("💊 SmartMeds-AI｜用藥建議與交互作用小幫手")
 
 # ---------- Google Sheets 認證 ----------
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["GSPREAD_CREDENTIALS"], scope)
-gs_client = gspread.authorize(creds)
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+creds_dict = st.secrets["GSPREAD_CREDENTIALS"]
+credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+gs_client = gspread.authorize(credentials)
 sheet = gs_client.open("SmartMeds_DB").sheet1
 
 # ---------- OpenAI client ----------
@@ -18,7 +19,7 @@ openai_client = OpenAI(api_key=st.secrets["OPENAI"]["api_key"])
 
 def get_drug_advice(drug_list, age, conditions):
     prompt = (
-        "你是一位資深臨床藥師，請根據最新 2023 Beers Criteria 與 2022 STOPP/START v3，"
+        "你是資深臨床藥師，需依 2023 Beers Criteria 與 2022 STOPP/START v3 "
         "針對下列資訊給出用藥安全分析與建議，格式：\n"
         "1. 潛在問題\n2. 機制/風險\n3. 建議替代方案/監測\n4. 參考來源 (Beers/STOPP)。\n"
         f"年齡: {age} 歲\n"
@@ -50,18 +51,16 @@ if st.button("📋 生成用藥建議"):
             advice = get_drug_advice(drugs, age, conditions)
             st.markdown(advice)
 
-            # --------- 回寫 Google Sheet ---------
             sheet.append_row([
-                None,                   # 姓名 (留空)
+                None,
                 age,
-                None,                   # 性別
-                ", ".join(conditions),  # 疾病
-                ", ".join(drugs),       # 目前用藥
+                None,
+                ", ".join(conditions),
+                ", ".join(drugs),
                 "AI",
                 "自動判讀",
                 advice,
                 datetime.utcnow().isoformat()
             ])
-
         except Exception as e:
             st.error(f"🛑 發生錯誤：{e}")
