@@ -47,7 +47,7 @@ if st.button("生成用藥建議"):
 
     try:
         rsp = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
