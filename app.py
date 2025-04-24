@@ -1,88 +1,67 @@
 import streamlit as st
 import gspread
-from google.oauth2.service_account import Credentials
-import openai
+from openai import OpenAI
+from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
-# ---------- OpenAI Key ----------
-if "OPENAI" in st.secrets:
-    openai.api_key = st.secrets["OPENAI"]["api_key"]
-elif "OPENAI_API_KEY" in st.secrets:
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    st.error("找不到 OpenAI API Key，請在 Secrets 中設定。")
-    st.stop()
+st.set_page_config(page_title="SmartMeds-AI", page_icon="💊", layout="centered")
+st.title("💊 SmartMeds-AI｜用藥建議與交互作用小幫手")
 
-# ---------- Google Service Account ----------
-gcp_fields = [
-    "type","project_id","private_key_id","private_key","client_email",
-    "client_id","auth_uri","token_uri",
-    "auth_provider_x509_cert_url","client_x509_cert_url"
-]
-try:
-    creds_dict = {k: st.secrets[k] for k in gcp_fields}
-except KeyError as e:
-    st.error(f"缺少 Google 服務帳戶欄位 {e}")
-    st.stop()
+# ---------- Google Sheets 認證 ----------
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["GSPREAD_CREDENTIALS"], scope)
+gs_client = gspread.authorize(creds)
+sheet = gs_client.open("SmartMeds_DB").sheet1
 
-credentials = Credentials.from_service_account_info(
-    creds_dict,
-    scopes=[
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ],
-)
-gc = gspread.authorize(credentials)
-worksheet = gc.open("SmartMeds_DB").sheet1
+# ---------- OpenAI client ----------
+openai_client = OpenAI(api_key=st.secrets["OPENAI"]["api_key"])
 
-# ---------- UI ----------
-st.set_page_config(page_title="SmartMeds-AI", page_icon="💊")
-st.title("💊 SmartMeds-AI｜AI藥師照護建議")
-
-drug_query = st.text_input("🔍 搜尋藥品名稱（多項以逗號分隔）")
-age = st.number_input("🎂 年齡", 0, 120, step=1)
-history_text = st.text_area("🩺 病史或慢性疾病（多項以逗號分隔）")
-
-if st.button("生成用藥建議"):
-    meds = [m.strip() for m in drug_query.split(",") if m.strip()]
-    histories = [h.strip() for h in history_text.split(",") if h.strip()]
-    if not meds:
-        st.warning("請至少輸入一個藥品名稱")
-        st.stop()
-
-    sys_prompt = (
-        "你是資深臨床藥師，需依 2023 Beers Criteria 與 2022 STOPP/START v3 "
-        "就病人年齡、病史與查詢藥品提供建議，格式："
-        "(1) 潛在問題 (2) 機制/風險 (3) 建議替代方案與監測 (4) 參考來源。"
-        "請用繁體中文回答。"
+def get_drug_advice(drug_list, age, conditions):
+    prompt = (
+        "你是一位資深臨床藥師，請根據最新 2023 Beers Criteria 與 2022 STOPP/START v3，"
+        "針對下列資訊給出用藥安全分析與建議，格式：\n"
+        "1. 潛在問題\n2. 機制/風險\n3. 建議替代方案/監測\n4. 參考來源 (Beers/STOPP)。\n"
+        f"年齡: {age} 歲\n"
+        f"病史: {', '.join(conditions) if conditions else '無'}\n"
+        f"藥品: {', '.join(drug_list)}\n"
+        "請以繁體中文分段回答。"
     )
-    user_prompt = f"年齡:{age} 歲\n病史:{', '.join(histories)}\n查詢藥品:{', '.join(meds)}"
+    resp = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    return resp.choices[0].message.content
 
-    try:
-        resp = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role":"system","content":sys_prompt},
-                {"role":"user","content":user_prompt}
-            ],
-            temperature=0.3,
-        )
-        advice = resp.choices[0].message.content
-    except Exception as e:
-        st.error(f"OpenAI 發生錯誤：{e}")
+# ---------- 使用者介面 ----------
+drug_input = st.text_input("🔎 請輸入藥品名稱（多項請以逗號分隔）")
+age = st.number_input("👤 年齡", min_value=1, max_value=120, value=65)
+cond_input = st.text_input("🩺 病史或慢性疾病（多項請以逗號分隔，可留空）")
+
+if st.button("📋 生成用藥建議"):
+    drugs = [d.strip() for d in drug_input.split(",") if d.strip()]
+    conditions = [c.strip() for c in cond_input.split(",") if c.strip()]
+    if not drugs:
+        st.warning("請輸入至少一個藥品名稱。")
         st.stop()
 
-    st.subheader("📑 AI 藥師建議")
-    st.markdown(advice)
+    with st.spinner("AI 努力分析中..."):
+        try:
+            advice = get_drug_advice(drugs, age, conditions)
+            st.markdown(advice)
 
-    worksheet.append_row([
-        None,
-        age or None,
-        None,
-        ", ".join(histories),
-        ", ".join(meds),
-        "AI",
-        "自動判讀",
-        advice,
-        datetime.utcnow().isoformat()
-    ])
+            # --------- 回寫 Google Sheet ---------
+            sheet.append_row([
+                None,                   # 姓名 (留空)
+                age,
+                None,                   # 性別
+                ", ".join(conditions),  # 疾病
+                ", ".join(drugs),       # 目前用藥
+                "AI",
+                "自動判讀",
+                advice,
+                datetime.utcnow().isoformat()
+            ])
+
+        except Exception as e:
+            st.error(f"🛑 發生錯誤：{e}")
