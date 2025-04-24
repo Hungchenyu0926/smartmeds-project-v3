@@ -1,12 +1,13 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-import openai, json
+from openai import OpenAI            # ← 重點
 from datetime import datetime
 
 # ---------- Secrets ----------
-openai.api_key = st.secrets["OPENAI"]["api_key"]
+client = OpenAI(api_key=st.secrets["OPENAI"]["api_key"])   # ← ★ 只給 api_key
 
+# Google Sheet 授權（同前）
 gcp_fields = [
     "type","project_id","private_key_id","private_key","client_email",
     "client_id","auth_uri","token_uri",
@@ -52,13 +53,13 @@ if st.button("生成用藥建議"):
     )
 
     try:
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+        response = client.chat.completions.create(       # ← 使用 client 物件
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},
             ],
-            temperature=0.5,
+            temperature=0.3,
         )
         advice = response.choices[0].message.content
     except Exception as e:
@@ -80,4 +81,5 @@ if st.button("生成用藥建議"):
         advice,               # 修正意見
         datetime.utcnow().isoformat()  # 照護時間
     ])
+
 
